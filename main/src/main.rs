@@ -1,23 +1,20 @@
 use std::{
     sync::{
         Arc, 
-        Mutex, 
-        mpsc::{ 
-            Receiver, 
-            channel 
-        }
     }, 
     time::{ 
         Duration, 
-        // Instant,
+        Instant,
     }
 };
-use tokio_stream::StreamExt;
 
 use actix_web::{
     App, HttpServer, get, rt,
     web::Data
 };
+
+use tokio_stream::StreamExt;
+use num_cpus;
 
 use rdkafka::{
     ClientConfig, 
@@ -34,7 +31,7 @@ use rdkafka::{
 
 #[get("/")]
 async fn landing(state: Data<AppState>) -> String {
-    // let t = Instant::now();
+    let time = Instant::now();
 
     &state.producer.send(
         FutureRecord::to("exp-queue_general-4-forth")
@@ -45,10 +42,10 @@ async fn landing(state: Data<AppState>) -> String {
         .await
         .expect("Unable to send message");
 
-    let stream = state.stream.lock().unwrap();
-    let value = stream.recv().unwrap_or("".to_owned());
+    let stream = state.stream.clone();
+    let value = stream.recv_async().await.unwrap_or("".to_owned());
 
-    // println!("Take {}", t.elapsed().as_millis());
+    println!("Take {}", time.elapsed().as_millis());
 
     value
 }
@@ -56,7 +53,7 @@ async fn landing(state: Data<AppState>) -> String {
 #[derive(Clone)]
 pub struct AppState {
     pub producer: Arc<FutureProducer>,
-    pub stream: Arc<Mutex<Receiver<String>>>
+    pub stream: flume::Receiver<String>
 }
 
 #[actix_web::main]
@@ -68,7 +65,7 @@ async fn main() -> std::io::Result<()> {
         .create()
         .expect("Kafka config");
 
-    let (tx, rx) = channel::<String>();
+    let (tx, rx) = flume::unbounded::<String>();
 
     rt::spawn(async move {
         let consumer: StreamConsumer = ClientConfig::new()
@@ -92,9 +89,9 @@ async fn main() -> std::io::Result<()> {
                             .unwrap_or("Error serializing".as_bytes())
                     ).to_string();
         
-                    println!("Got {}", result);
+                    // println!("Got {}", result);
 
-                    tx.send(result).expect("Tx");        
+                    tx.send_async(result).await.expect("Tx");        
                 },
                 Err(error) => {
                     println!("Kafka error {}", error);
@@ -105,7 +102,7 @@ async fn main() -> std::io::Result<()> {
 
     let state = AppState {
         producer: Arc::new(producer),
-        stream: Arc::new(Mutex::new(rx))
+        stream: rx
     };
 
     HttpServer::new(move || {
@@ -113,6 +110,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(Data::new(state.clone()))
             .service(landing)
     })
+    .workers(num_cpus::get() - 1)
     .bind("0.0.0.0:8080")?
     .run()
     .await

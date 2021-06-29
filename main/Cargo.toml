@@ -9,7 +9,8 @@ edition = "2018"
 [dependencies]
 actix-rt = "2.2.0"
 actix-web = "4.0.0-beta.8"
-plume = "0.1.1"
+flume = "0.10.7"
+num_cpus = "1.13.0"
 rdkafka = "0.26.0"
 tokio = { version = "1.7.1", features = ["full"] }
 tokio-stream = "0.1.6"

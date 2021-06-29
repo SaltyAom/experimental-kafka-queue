@@ -27,11 +27,14 @@ await consumer
 		eachMessage: async ({ partition, message }) => {
 			let t = Date.now()
 
-			// console.log({
-			// 	partition,
-			// 	offset: message.offset,
-			// 	value: message.value.toString()
-			// })
+			console.log({
+				partition,
+				offset: message.offset,
+				value: message.value.toString()
+			})
+
+			// ? For testing race condition
+			await new Promise(resolve => setTimeout(resolve, 5000))
 
 			await producer.send({
 				topic: 'exp-queue_general-4-back',
