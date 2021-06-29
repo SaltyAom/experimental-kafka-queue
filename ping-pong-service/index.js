@@ -32,7 +32,7 @@ await consumer
 				offset: message.offset,
 				value: message.value.toString()
 			})
-			
+
 			await producer.send({
 				topic: 'exp-queue_general-back',
 				messages: [

@@ -1,24 +1,17 @@
-use std::{sync::Arc, time::{ Duration, Instant, SystemTime, UNIX_EPOCH }};
+use std::{sync::{Arc, Mutex, mpsc::{ Receiver, channel }}, time::{ Duration, Instant, SystemTime, UNIX_EPOCH }, mem};
 use tokio_stream::StreamExt;
+use tokio::sync::{ futures };
 use rand::{distributions::Alphanumeric, Rng};
 
 use actix_web::{
-    App, HttpServer, get,
+    App, HttpServer, get, rt,
     web::Data
 };
 
-use rdkafka::{
-    ClientConfig, 
-    Message, 
-    consumer::{
-        Consumer, 
-        StreamConsumer
-    }, 
-    producer::{
+use rdkafka::{ClientConfig, Message, consumer::{Consumer, DefaultConsumerContext, MessageStream, StreamConsumer}, producer::{
         FutureProducer, 
         FutureRecord
-    }
-};
+    }};
 
 fn generate_key() -> String {
     let key: String = rand::thread_rng()
@@ -52,32 +45,22 @@ async fn landing(state: Data<AppState>) -> String {
 
     println!("Send take {}", t.elapsed().as_millis());
 
-    let mut stream = state.consumer.stream();
-    let mut value = String::from("");
+    let a = state.stream.lock().unwrap();
 
-    while let Ok(message) = stream.next().await.unwrap() {
-        let result = String::from_utf8_lossy(
-            message
-                .payload()
-                .unwrap_or("Error serializing".as_bytes())
-        ).to_string();
+    let b = a.recv().unwrap_or("".to_owned());
 
-        if message.key().unwrap() == key.as_bytes() {
-            value = result.to_owned();
-
-            break;
-        }
-    }
+    println!("{}", b);
 
     println!("Take {}", t.elapsed().as_millis());
 
-    value
+    // value
+    "Hello World".to_owned()
 }
 
 #[derive(Clone)]
 pub struct AppState {
     pub producer: Arc<FutureProducer>,
-    pub consumer: Arc<StreamConsumer>
+    pub stream: Arc<Mutex<Receiver<String>>>
 }
 
 #[actix_web::main]
@@ -89,7 +72,7 @@ async fn main() -> std::io::Result<()> {
         .create()
         .expect("Kafka config");
 
-    let consumer: StreamConsumer = ClientConfig::new()
+        let consumer: StreamConsumer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
         .set("group.id", "exp-queue_general-back")
         .create()
@@ -99,9 +82,43 @@ async fn main() -> std::io::Result<()> {
         .subscribe(&vec!["exp-queue_general-back".as_ref()])
         .expect("Can't subscribe");
 
+    let (tx, rx) = channel::<String>();
+
+    rt::spawn(async move {
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", "localhost:9092")
+            .set("group.id", "exp-queue_general-back")
+            .create()
+            .expect("Kafka config");
+
+        consumer
+            .subscribe(&vec!["exp-queue_general-back".as_ref()])
+            .expect("Can't subscribe");
+
+        let mut a = consumer.stream();
+
+        println!("Hi");
+
+        while let Ok(message) = a.next().await.unwrap() {
+            println!("Got somethin");
+
+            let result = String::from_utf8_lossy(
+                message
+                    .payload()
+                    .unwrap_or("Error serializing".as_bytes())
+            ).to_string();
+
+            println!("Got {}", result);
+            
+            tx.send(result).expect("Tx");
+        }
+
+        println!("Lol bye");
+    });
+
     let state = AppState {
         producer: Arc::new(producer),
-        consumer: Arc::new(consumer)
+        stream: Arc::new(Mutex::new(rx))
     };
 
     HttpServer::new(move || {
