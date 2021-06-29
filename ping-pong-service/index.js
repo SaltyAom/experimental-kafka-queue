@@ -13,28 +13,31 @@ const kafka = new Kafka({
 
 const producer = kafka.producer()
 const consumer = kafka.consumer({
-	groupId: 'experiment-kafka-queue'
+	groupId: 'experiment-kafka-queue-5'
 })
 
 await Promise.all([
 	producer.connect(),
 	consumer.connect(),
-	consumer.subscribe({ topic: 'exp-queue_general-forth', fromBeginning: true })
+	consumer.subscribe({ topic: 'exp-queue_general-5-forth', fromBeginning: true })
 ])
 
 await consumer
 	.run({
 		eachMessage: async ({ partition, message }) => {
-			let t = Date.now()
+			let time = Date.now()
 
-			console.log({
-				partition,
-				offset: message.offset,
-				value: message.value.toString()
-			})
-			
+			// console.log({
+			// 	partition,
+			// 	offset: message.offset,
+			// 	value: message.value.toString()
+			// })
+
+			// ? For testing race condition
+			// await new Promise(resolve => setTimeout(resolve, 3000))
+
 			await producer.send({
-				topic: 'exp-queue_general-back',
+				topic: 'exp-queue_general-5-back',
 				messages: [
 					{
 						key: message.key,
@@ -43,7 +46,7 @@ await consumer
 				]
 			})
 
-			console.log(`Take ${Date.now() - t}`)
+			console.log(`Take ${Date.now() - time}`)
 		}
 	})
 	.catch((err) => {
