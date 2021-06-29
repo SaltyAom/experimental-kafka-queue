@@ -1,20 +1,27 @@
 use std::{
-    sync::{
-        Arc, 
-    }, 
+    sync::Arc,
     time::{ 
         Duration, 
-        Instant,
+        Instant
     }
 };
 
 use actix_web::{
-    App, HttpServer, get, rt,
+    App, 
+    HttpServer, 
+    get, 
+    rt,
     web::Data
 };
 
+// use tokio::time::sleep;
 use tokio_stream::StreamExt;
+
 use num_cpus;
+use rand::{
+    distributions::Alphanumeric, 
+    Rng
+};
 
 use rdkafka::{
     ClientConfig, 
@@ -29,31 +36,50 @@ use rdkafka::{
     }
 };
 
+
+#[derive(Clone)]
+pub struct AppState {
+    pub producer: Arc<FutureProducer>,
+    pub receiver: flume::Receiver<String>
+}
+
+fn generate_key() -> String {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(char::from)
+        .collect()
+}
+
 #[get("/")]
 async fn landing(state: Data<AppState>) -> String {
     let time = Instant::now();
 
+    let key = generate_key();
+
     &state.producer.send(
-        FutureRecord::to("exp-queue_general-4-forth")
-            .key("test")
+        FutureRecord::to("exp-queue_general-5-forth")
+            .key(&key)
             .payload("Hello From Rust"),
             Duration::from_secs(5)
     )
         .await
         .expect("Unable to send message");
 
-    let stream = state.stream.clone();
-    let value = stream.recv_async().await.unwrap_or("".to_owned());
+    let receiver = state.receiver.clone();
+    let value = receiver.recv_async().await.unwrap_or("".to_owned());
 
     println!("Take {}", time.elapsed().as_millis());
 
     value
 }
 
-#[derive(Clone)]
-pub struct AppState {
-    pub producer: Arc<FutureProducer>,
-    pub stream: flume::Receiver<String>
+#[get("/status")]
+async fn heartbeat() -> &'static str {
+    // ? Concurrency delay check
+    // sleep(Duration::from_secs(3)).await;
+
+    "Working"
 }
 
 #[actix_web::main]
@@ -61,7 +87,7 @@ async fn main() -> std::io::Result<()> {
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
         .set("message.timeout.ms", "5000")
-        .set("group.id", "exp-queue_general-4-forth")
+        .set("group.id", "exp-queue_general-5-forth")
         .create()
         .expect("Kafka config");
 
@@ -70,12 +96,12 @@ async fn main() -> std::io::Result<()> {
     rt::spawn(async move {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", "localhost:9092")
-            .set("group.id", "exp-queue_general-4-back")
+            .set("group.id", "exp-queue_general-5-back")
             .create()
             .expect("Kafka config");
 
         consumer
-            .subscribe(&vec!["exp-queue_general-4-back".as_ref()])
+            .subscribe(&vec!["exp-queue_general-5-back".as_ref()])
             .expect("Can't subscribe");
 
         let mut stream = consumer.stream();
@@ -88,8 +114,6 @@ async fn main() -> std::io::Result<()> {
                             .payload()
                             .unwrap_or("Error serializing".as_bytes())
                     ).to_string();
-        
-                    // println!("Got {}", result);
 
                     tx.send_async(result).await.expect("Tx");        
                 },
@@ -102,15 +126,23 @@ async fn main() -> std::io::Result<()> {
 
     let state = AppState {
         producer: Arc::new(producer),
-        stream: rx
+        receiver: rx
     };
+
+    // ? Assume that the whole node is just Rust instance
+    let mut cpus = num_cpus::get() - 1;
+
+    if cpus < 1 {
+        cpus = 1;
+    }
 
     HttpServer::new(move || {
         App::new()
             .app_data(Data::new(state.clone()))
             .service(landing)
+            .service(heartbeat)
     })
-    .workers(num_cpus::get() - 1)
+    .workers(cpus)
     .bind("0.0.0.0:8080")?
     .run()
     .await
