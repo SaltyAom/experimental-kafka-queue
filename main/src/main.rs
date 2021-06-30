@@ -6,6 +6,7 @@ use std::{
     }
 };
 
+use actix::{ Actor, Message as ActixMessage, Context, Handler };
 use actix_web::{
     App, 
     HttpServer, 
@@ -25,22 +26,83 @@ use rand::{
 
 use rdkafka::{
     ClientConfig, 
-    Message, 
+    Message as KafkaMessage, 
     consumer::{
         Consumer, 
         StreamConsumer
     }, 
     producer::{
-        FutureProducer, 
-        FutureRecord
+        BaseProducer, 
+        BaseRecord
     }
 };
 
 const TOPIC: &'static str = "exp-queue_general-5";
 
+#[derive(r#ActixMessage)]
+#[rtype(result = "Result<String, std::io::Error>")]
+pub struct ReceiverActorInput {
+    receiver: flume::Receiver<String>
+}
+
+pub struct ReceiverActor;
+
+impl Actor for ReceiverActor {
+    type Context = Context<Self>;
+}
+
+impl Handler<ReceiverActorInput> for ReceiverActor {
+    type Result = Result<String, std::io::Error>;
+
+    fn handle(&mut self, msg: ReceiverActorInput, _ctx: &mut Context<Self>) -> Self::Result {
+        Ok(
+            msg
+                .receiver
+                .recv()
+                .unwrap_or(
+                    "".to_owned()
+                )
+            )
+    }
+}
+
+#[derive(r#ActixMessage)]
+#[rtype(result = "Result<(), std::io::Error>")]
+pub struct ProducerActorInput {
+    producer: Arc<BaseProducer>,
+    message: &'static str
+}
+
+pub struct ProducerActor;
+
+impl Actor for ProducerActor {
+    type Context = Context<Self>;
+}
+
+impl Handler<ProducerActorInput> for ProducerActor {
+    type Result = Result<(), std::io::Error>;
+
+    fn handle(&mut self, msg: ProducerActorInput, _ctx: &mut Context<Self>) -> Self::Result {
+        let producer = msg.producer.clone();
+        let message = msg.message;
+
+        let key = generate_key();
+
+        producer
+            .send(
+                BaseRecord::to(&format!("{}-forth", TOPIC))
+                    .key(&key)
+                    .payload(message)
+            )
+            .expect("Unable to send message");
+
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
-    pub producer: Arc<FutureProducer>,
+    pub producer: Arc<BaseProducer>,
     pub receiver: flume::Receiver<String>
 }
 
@@ -54,31 +116,30 @@ fn generate_key() -> String {
 
 #[get("/")]
 async fn landing(state: Data<AppState>) -> String {
-    let key = generate_key();
-    let t1 = Instant::now();
+    // let t1 = Instant::now();
 
-    let producer = &state.producer;
-    let receiver = &state.receiver;
+    let producer = state.producer.clone();
+    let receiver = state.receiver.clone();
 
-    producer
-        .send(
-            FutureRecord::to(&format!("{}-forth", TOPIC))
-                .key(&key)
-                .payload("Hello From Rust"),
-                Duration::from_secs(8)
-        )
+    let producer_actor = ProducerActor.start();
+    let receiver_actor = ReceiverActor.start();
+
+    producer_actor.send(ProducerActorInput {
+        producer,
+        message: "Hello from Rust"
+    })
         .await
-        .expect("Unable to send message");
+        .unwrap()
+        .unwrap();
 
-    println!("Producer take {} ms", t1.elapsed().as_millis());
-    
-    let t2 = Instant::now();
-    let value = receiver
-        .recv()
-        .unwrap_or("".to_owned());
+    let value = receiver_actor.send(ReceiverActorInput {
+        receiver
+    })
+        .await
+        .unwrap()
+        .unwrap();
 
-    println!("Receiver take {} ms", t2.elapsed().as_millis());
-    println!("Process take {} ms\n", t1.elapsed().as_millis());
+    // println!("Process take {} ms", t1.elapsed().as_millis());
 
     value
 }
@@ -100,13 +161,11 @@ async fn main() -> std::io::Result<()> {
         cpus = 1;
     }
 
-    println!("Cpus {}", cpus);
-    
-    let producer: FutureProducer = ClientConfig::new()
+    let producer: BaseProducer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
-        .set("linger.ms", "25")
+        .set("linger.ms", "15")
         .set("queue.buffering.max.messages", "1000000")
-        .set("queue.buffering.max.ms", "25")
+        .set("queue.buffering.max.ms", "15")
         .set("compression.type", "lz4")
         .set("retries", "40000")
         .set("retries", "0")
@@ -166,7 +225,7 @@ async fn main() -> std::io::Result<()> {
             .service(landing)
             .service(heartbeat)
     })
-    .workers(cpus)
+    .workers(6)
     .bind("0.0.0.0:8080")?
     .run()
     .await
