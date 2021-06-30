@@ -71,5 +71,5 @@ consumer.on('data', async ({ partition, value, key, offset }) => {
 		console.warn(error)
 	}
 
-	// console.log(`Take ${Date.now() - time}`)
+	console.log(`Take ${Date.now() - time}`)
 })

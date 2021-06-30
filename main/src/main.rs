@@ -14,6 +14,7 @@ use actix_web::{
     web::Data
 };
 
+use futures::TryStreamExt;
 use tokio::time::sleep;
 
 use num_cpus;
@@ -37,7 +38,6 @@ use rdkafka::{
 
 const TOPIC: &'static str = "exp-queue_general-5";
 
-
 #[derive(Clone)]
 pub struct AppState {
     pub producer: Arc<FutureProducer>,
@@ -54,22 +54,31 @@ fn generate_key() -> String {
 
 #[get("/")]
 async fn landing(state: Data<AppState>) -> String {
-    // let time = Instant::now();
     let key = generate_key();
+    let t1 = Instant::now();
 
-    &state.producer.send(
-        FutureRecord::to(&format!("{}-forth", TOPIC))
-            .key(&key)
-            .payload("Hello From Rust"),
-            Duration::from_secs(8)
-    )
+    let producer = &state.producer;
+    let receiver = &state.receiver;
+
+    producer
+        .send(
+            FutureRecord::to(&format!("{}-forth", TOPIC))
+                .key(&key)
+                .payload("Hello From Rust"),
+                Duration::from_secs(8)
+        )
         .await
         .expect("Unable to send message");
 
-    let receiver = state.receiver.clone();
-    let value = receiver.recv().unwrap_or("".to_owned());
+    println!("Producer take {} ms", t1.elapsed().as_millis());
+    
+    let t2 = Instant::now();
+    let value = receiver
+        .recv()
+        .unwrap_or("".to_owned());
 
-    // println!("Take {}", time.elapsed().as_millis());
+    println!("Receiver take {} ms", t2.elapsed().as_millis());
+    println!("Process take {} ms\n", t1.elapsed().as_millis());
 
     value
 }
@@ -84,6 +93,15 @@ async fn heartbeat() -> &'static str {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // ? Assume that the whole node is just Rust instance
+    let mut cpus = num_cpus::get() / 2 - 1;
+
+    if cpus < 1 {
+        cpus = 1;
+    }
+
+    println!("Cpus {}", cpus);
+    
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
         .set("linger.ms", "40")
@@ -112,37 +130,35 @@ async fn main() -> std::io::Result<()> {
             .subscribe(&vec![format!("{}-back", TOPIC).as_ref()])
             .expect("Can't subscribe");
 
-        loop {
-            let stream = consumer.recv();
+        consumer
+            .stream()
+            .try_for_each_concurrent(
+                cpus,
+                |message| {
+                    let txx = tx.clone();
 
-            match stream.await {
-                Ok(message) => {
-                    let result = String::from_utf8_lossy(
-                        message
+                    async move {
+                        let result = String::from_utf8_lossy(
+                            message
                             .payload()
                             .unwrap_or("Error serializing".as_bytes())
-                    ).to_string();
-       
-                    tx.send(result).expect("Tx not sending");
-                },
-                Err(error) => {
-                    println!("Kafka Error: {}", error);
+                        ).to_string();
+
+                        txx.send(result).expect("Tx not sending");
+
+                        Ok(())
+                    }
+
                 }
-            }
-        }
+            )
+            .await
+            .expect("Error reading stream");
     });
 
     let state = AppState {
         producer: Arc::new(producer),
         receiver: rx
     };
-
-    // ? Assume that the whole node is just Rust instance
-    let mut cpus = num_cpus::get() - 1;
-
-    if cpus < 1 {
-        cpus = 1;
-    }
 
     HttpServer::new(move || {
         App::new()
