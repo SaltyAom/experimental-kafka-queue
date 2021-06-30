@@ -86,7 +86,7 @@ async fn landing(state: Data<AppState>) -> String {
 #[get("/status")]
 async fn heartbeat() -> &'static str {
     // ? Concurrency delay check
-    sleep(Duration::from_secs(3)).await;
+    sleep(Duration::from_secs(1)).await;
 
     "Working"
 }
@@ -104,9 +104,9 @@ async fn main() -> std::io::Result<()> {
     
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
-        .set("linger.ms", "40")
+        .set("linger.ms", "25")
         .set("queue.buffering.max.messages", "1000000")
-        .set("queue.buffering.max.ms", "50")
+        .set("queue.buffering.max.ms", "25")
         .set("compression.type", "lz4")
         .set("retries", "40000")
         .set("retries", "0")

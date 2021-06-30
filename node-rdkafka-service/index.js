@@ -11,10 +11,11 @@ const getTime = () => {
 
 const producer = new Producer({
 	'client.id': 'node-rdkafka',
+	topic: `${topic}-back`,
 	'metadata.broker.list': 'localhost:9092',
-	'linger.ms': 40,
+	'linger.ms': 25,
 	'queue.buffering.max.messages': 1000000,
-	'queue.buffering.max.ms': 50,
+	'queue.buffering.max.ms': 25,
 	'compression.codec': 'lz4',
 	'batch.num.messages': 40000,
 	retries: 0,
