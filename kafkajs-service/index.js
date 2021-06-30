@@ -1,5 +1,7 @@
 import { Kafka } from 'kafkajs'
 
+const topic = "exp-queue_general-5"
+
 const getTime = () => {
 	let date = new Date()
 
@@ -7,25 +9,25 @@ const getTime = () => {
 }
 
 const kafka = new Kafka({
-	clientId: 'Prism',
+	clientId: 'kafkajs',
 	brokers: ['localhost:9092']
 })
 
 const producer = kafka.producer()
 const consumer = kafka.consumer({
-	groupId: 'experiment-kafka-queue-5'
+	groupId: topic
 })
 
 await Promise.all([
 	producer.connect(),
 	consumer.connect(),
-	consumer.subscribe({ topic: 'exp-queue_general-5-forth', fromBeginning: true })
+	consumer.subscribe({ topic: `${topic}-forth`, fromBeginning: true })
 ])
 
 await consumer
 	.run({
 		eachMessage: async ({ partition, message }) => {
-			let time = Date.now()
+			// let time = Date.now()
 
 			// console.log({
 			// 	partition,
@@ -37,7 +39,7 @@ await consumer
 			// await new Promise(resolve => setTimeout(resolve, 3000))
 
 			await producer.send({
-				topic: 'exp-queue_general-5-back',
+				topic: `${topic}-back`,
 				messages: [
 					{
 						key: message.key,
@@ -46,7 +48,7 @@ await consumer
 				]
 			})
 
-			console.log(`Take ${Date.now() - time}`)
+			// console.log(`Take ${Date.now() - time}`)
 		}
 	})
 	.catch((err) => {

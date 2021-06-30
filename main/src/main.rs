@@ -14,8 +14,7 @@ use actix_web::{
     web::Data
 };
 
-// use tokio::time::sleep;
-use tokio_stream::StreamExt;
+use tokio::time::sleep;
 
 use num_cpus;
 use rand::{
@@ -36,6 +35,8 @@ use rdkafka::{
     }
 };
 
+const TOPIC: &'static str = "exp-queue_general-5";
+
 
 #[derive(Clone)]
 pub struct AppState {
@@ -53,23 +54,22 @@ fn generate_key() -> String {
 
 #[get("/")]
 async fn landing(state: Data<AppState>) -> String {
-    let time = Instant::now();
-
+    // let time = Instant::now();
     let key = generate_key();
 
     &state.producer.send(
-        FutureRecord::to("exp-queue_general-5-forth")
+        FutureRecord::to(&format!("{}-forth", TOPIC))
             .key(&key)
             .payload("Hello From Rust"),
-            Duration::from_secs(5)
+            Duration::from_secs(8)
     )
         .await
         .expect("Unable to send message");
 
     let receiver = state.receiver.clone();
-    let value = receiver.recv_async().await.unwrap_or("".to_owned());
+    let value = receiver.recv().unwrap_or("".to_owned());
 
-    println!("Take {}", time.elapsed().as_millis());
+    // println!("Take {}", time.elapsed().as_millis());
 
     value
 }
@@ -77,7 +77,7 @@ async fn landing(state: Data<AppState>) -> String {
 #[get("/status")]
 async fn heartbeat() -> &'static str {
     // ? Concurrency delay check
-    // sleep(Duration::from_secs(3)).await;
+    sleep(Duration::from_secs(3)).await;
 
     "Working"
 }
@@ -86,8 +86,13 @@ async fn heartbeat() -> &'static str {
 async fn main() -> std::io::Result<()> {
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", "localhost:9092")
-        .set("message.timeout.ms", "5000")
-        .set("group.id", "exp-queue_general-5-forth")
+        .set("linger.ms", "40")
+        .set("queue.buffering.max.messages", "1000000")
+        .set("queue.buffering.max.ms", "50")
+        .set("compression.type", "lz4")
+        .set("retries", "40000")
+        .set("retries", "0")
+        .set("message.timeout.ms", "8000")
         .create()
         .expect("Kafka config");
 
@@ -96,29 +101,32 @@ async fn main() -> std::io::Result<()> {
     rt::spawn(async move {
         let consumer: StreamConsumer = ClientConfig::new()
             .set("bootstrap.servers", "localhost:9092")
-            .set("group.id", "exp-queue_general-5-back")
+            .set("group.id", &format!("{}-back", TOPIC))
+            .set("queued.min.messages", "200000")
+            .set("fetch.error.backoff.ms", "250")
+            .set("socket.blocking.max.ms", "500")
             .create()
             .expect("Kafka config");
 
         consumer
-            .subscribe(&vec!["exp-queue_general-5-back".as_ref()])
+            .subscribe(&vec![format!("{}-back", TOPIC).as_ref()])
             .expect("Can't subscribe");
 
-        let mut stream = consumer.stream();
+        loop {
+            let stream = consumer.recv();
 
-        while let Some(message) = stream.next().await {
-            match message {
+            match stream.await {
                 Ok(message) => {
                     let result = String::from_utf8_lossy(
                         message
                             .payload()
                             .unwrap_or("Error serializing".as_bytes())
                     ).to_string();
-
-                    tx.send_async(result).await.expect("Tx");        
+       
+                    tx.send(result).expect("Tx not sending");
                 },
                 Err(error) => {
-                    println!("Kafka error {}", error);
+                    println!("Kafka Error: {}", error);
                 }
             }
         }

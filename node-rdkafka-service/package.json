@@ -1,0 +1,16 @@
+{
+  "name": "node-rdkafka-service",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon"
+  },
+  "dependencies": {
+    "node-rdkafka": "^2.10.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.8"
+  }
+}
